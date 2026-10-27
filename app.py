@@ -47,7 +47,7 @@ else:
     hdb = sqlite3.connect(HDB, check_same_thread=False); hdb.row_factory = sqlite3.Row
     INTEGER_ID = 'integer primary key autoincrement'
 def _x(c, sql, a, one):
-    r = c.execute(sql, a).fetchall(); c.commit()
+    cursor = c.execute(sql, a); r = cursor.fetchall() if cursor.description else []; c.commit()
     return (dict(r[0]) if r else None) if one else [dict(x) for x in r]
 def q(sql, a=(), one=False): return _x(db, sql, a, one)
 def hq(sql, a=(), one=False): return _x(hdb, sql, a, one)
