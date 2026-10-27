@@ -1,0 +1,11 @@
+services:
+  sentinel:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      ADMIN_PASSWORD: change-me-now
+      REG_KEY: change-this-key
+    volumes: ["sentinel-data:/data"]
+    restart: unless-stopped
+volumes:
+  sentinel-data:

@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ai-sentinel
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: REG_KEY
+        generateValue: true
