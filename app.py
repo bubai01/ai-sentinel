@@ -331,7 +331,7 @@ svg{display:block;max-width:100%;height:auto}.nd{cursor:pointer}
   <div class="set"><div><b>Auto-escalate</b><small>Escalate new alerts at or above the threshold</small></div><label class="sw"><input type="checkbox" id="s-auto"><span></span></label></div>
   <div class="set"><div><b>Alert threshold: <span id="tv">80</span></b><small>Shown as the dashed line on risk charts</small></div><input type="range" id="s-thr" min="40" max="95" value="80"></div>
   <div class="set"><div><b>Privacy mode</b><small>Mask employee names with IDs</small></div><label class="sw"><input type="checkbox" id="s-mask"><span></span></label></div>
-  <div class="btns" style="max-width:340px"><button class="btn p" data-act="save">Save settings</button><button class="btn s" data-act="reset">Reset demo</button></div></div><div class="card" style="max-width:720px;margin-top:16px"><h2>Audit Log</h2><p class="sub">Logins, escalations and setting changes stored in the database</p><div class="feed" id="audit"></div></div></section>
+  <div class="btns" style="max-width:340px"><button class="btn p" data-act="save">Save settings</button><button class="btn s" id="reset" data-act="reset">Reset demo</button></div></div><div class="card" style="max-width:720px;margin-top:16px"><h2>Audit Log</h2><p class="sub">Logins, escalations and setting changes stored in the database</p><div class="feed" id="audit"></div></div></section>
 </main></div>
 <div id="modal" class="ov" hidden><div class="box" id="mb"></div></div>
 <div id="toast"></div>
@@ -592,6 +592,7 @@ const refreshGraph=()=>call('/graph').then(g=>{applyGraph(g);render()}).catch(()
 const loadAudit=()=>call('/audit').then(r=>{$('#audit').innerHTML=r.map(x=>`<div><small>${xs(x.ts)}</small><span><b>${xs(x.user)}</b> · ${xs(x.action)} ${xs(x.detail)}</span></div>`).join('')||'<div class="empty">No activity yet</div>'}).catch(()=>{});
 async function boot(keep){const d=await call('/bootstrap');Object.keys(EMP).forEach(k=>delete EMP[k]);Object.assign(EMP,d.emp);AL=d.alerts;S.cases=d.cases;Object.assign(S.set,d.settings);
  $('#s-email').checked=S.set.email;$('#s-auto').checked=S.set.auto;$('#s-mask').checked=S.set.mask;$('#s-thr').value=S.set.thr;$('#tv').textContent=S.set.thr;
+ $('#reset').hidden=d.user.role!='admin';
  $('#uname').textContent=d.user.name;$('#uav').textContent=d.user.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
  applyGraph(d.graph);S.sel=AL[0]?AL[0].id:'';$('#login').hidden=true;const h=location.hash.slice(1);if(!keep)S.view=T[h]?h:'dashboard';render();loadAudit()}
 const panel=n=>{['login','gate','reg'].forEach(p=>$('#p-'+p).hidden=p!=n);['le','ge','re','lok'].forEach(i=>$('#'+i).textContent='')};
