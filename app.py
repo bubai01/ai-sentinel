@@ -18,14 +18,16 @@ if DATABASE_URL:
     class PostgresDatabase:
         def __init__(self, schema):
             self.connection = psycopg.connect(DATABASE_URL, row_factory=dict_row)
-            self.execute('create schema if not exists ' + schema)
-            self.execute('set search_path to ' + schema)
+            self.schema = schema
+            self.connection.execute('create schema if not exists ' + schema)
             self.commit()
 
         def execute(self, sql, params=()):
+            self.connection.execute('set search_path to ' + self.schema)
             return self.connection.execute(sql.replace('?', '%s'), params)
 
         def executemany(self, sql, params):
+            self.connection.execute('set search_path to ' + self.schema)
             cursor = self.connection.cursor()
             return cursor.executemany(sql.replace('?', '%s'), params)
 
