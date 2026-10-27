@@ -118,7 +118,9 @@ def now(): return datetime.now().strftime('%I:%M %p').lstrip('0')
 def ts(): return datetime.now().strftime('%d %b, %H:%M')
 def clk(h): hh = int(h); m = round((h - hh) * 60); return '%d:%02d %s' % ((hh % 12) or 12, m, 'AM' if hh < 12 else 'PM')
 def log(u, a, d=''): q('insert into audit(ts,"user",action,detail) values(?,?,?,?)', (ts(), u, a, d))
-def nxt(k): v = int(q('select v from meta where k=?', (k,), 1)['v']) + 1; q('insert into meta(k,v) values(?,?) on conflict(k) do update set v=excluded.v', (k, str(v))); return v
+def nxt(k):
+    row = q("insert into meta(k,v) values(?, '1') on conflict(k) do update set v=cast(meta.v as integer)+1 returning v", (k,), 1)
+    return int(row['v'])
 def prefs(): return q('select email,auto,thr,mask from prefs where id=1', (), 1)
 def err(c, d): raise HTTPException(c, d)
 
@@ -142,7 +144,7 @@ def seed():
         for c in cs: db.execute('insert into touch values(?,?)', (e, c))
     for a in SEED: db.execute('insert into alerts values(?,?,?,?,?,?,?)', (a[0], a[1], a[2], a[3], 'New', a[4], a[5]))
     db.execute('insert into prefs values(1,1,0,80,0)')
-    for k, v in (('seq', 2041), ('hseq', 3102), ('hauto', 1)): db.execute('insert into meta values(?,?)', (k, str(v)))
+    for k, v in (('seq', 2041), ('hseq', 3102), ('case_seq', 100), ('emp_seq', 9), ('hauto', 1)): db.execute('insert into meta values(?,?)', (k, str(v)))
     for r in [('8:05 AM', 'R', 'Core DB', None, 'customer_accounts', 'SELECT', 12, 6, None, 0, '', 0), ('1:12 AM', 'X', 'Decoy trigger', 'D2', None, 'SELECT', 14, 74, 'A-2038', 0, 'S-3102', 0), ('2:31 AM', 'A', 'Decoy trigger', 'D1', None, 'EXPORT', 5200, 97, 'A-2041', 1, 'S-3101', 900)]:
         hdb.execute('insert into hlog(ts,emp,src,dec,obj,act,nrows,score,alert,iso,sess,ms) values(?,?,?,?,?,?,?,?,?,?,?,?)', r)
     hdb.execute("insert into hsess values('S-3102','X','10.4.7.52','Known device','1:05 AM','Active',1,0)")
@@ -163,8 +165,16 @@ def populate(c, r, decoys):  # production = real-looking bank data; honeypot = f
 if not q('select 1 from customers limit 1', (), 1): populate(db, random.Random(1), False)
 if not hq('select 1 from customers limit 1', (), 1): populate(hdb, random.Random(2), True)
 if not q('select 1 from emp limit 1', (), 1): seed()
-if not q('select 1 from users limit 1', (), 1):
-    s = secrets.token_hex(8); q('insert into users values(?,?,?,?,?)', ('admin', hpw(ADMIN_PW, s), s, 'Fraud Investigator', 'admin'))
+case_ids = [int(row['id'][2:]) for row in q('select id from cases') if row['id'].startswith('C-') and row['id'][2:].isdigit()]
+employee_ids = [int(row['id'][1:]) for row in q('select id from emp') if row['id'].startswith('E') and row['id'][1:].isdigit()]
+for key, minimum in (('case_seq', max([100] + case_ids)), ('emp_seq', max([9] + employee_ids))):
+    q("insert into meta(k,v) values(?,?) on conflict(k) do update set v=case when cast(meta.v as integer)<cast(excluded.v as integer) then excluded.v else meta.v end", (key, str(minimum)))
+admin = q('select pw,salt,role from users where username=?', ('admin',), 1)
+if not admin:
+    s = secrets.token_hex(16); q('insert into users values(?,?,?,?,?)', ('admin', hpw(ADMIN_PW, s), s, 'Fraud Investigator', 'admin'))
+elif not secrets.compare_digest(admin['pw'], hpw(ADMIN_PW, admin['salt'])) or admin['role'] != 'admin':
+    s = secrets.token_hex(16)
+    q('update users set pw=?,salt=?,role=? where username=?', (hpw(ADMIN_PW, s), s, 'admin', 'admin'))
 
 try:  # ML: Isolation Forest trained on a synthetic "normal staff day" profile
     import numpy as np
@@ -447,11 +457,11 @@ function route(m,p,b,tok){
  if(p=='/reset'){if(u.role!='admin')return err(403,'Admin only');st=fresh();log(un,'reset demo data');return R({ok:true})}
  return err(404,'Not found')}
 const real=window.fetch&&window.fetch.bind(window);
-/* If a real AI Sentinel server answers /api/health, every /api call goes to it. Otherwise (file:// or a plain static host) the built-in demo backend above is used. */
+/* Use the in-browser demo only for a local file preview. HTTP pages must report real backend failures. */
 const probe=(real&&/^https?:/.test(location.protocol)?real('/api/health').then(r=>r.ok?r.json():null).catch(()=>null):Promise.resolve(null)).then(j=>j&&j.ok===true?j:null);
 window.__backend=probe;
 window.fetch=(url,o={})=>{const u=String(url);if(!u.startsWith('/api'))return real?real(url,o):Promise.reject(new Error('offline'));
- return probe.then(h=>{if(h)return real(url,o);
+ return probe.then(h=>{if(h||(real&&/^https?:/.test(location.protocol)))return real(url,o);
   const tok=((o.headers&&o.headers.Authorization)||'').replace('Bearer ','');let b={};try{b=o.body?JSON.parse(o.body):{}}catch(e){}
   return new Promise(r=>setTimeout(()=>r(route((o.method||'GET').toUpperCase(),u.slice(4),b,tok)),60))})};
 })();
@@ -684,7 +694,7 @@ def cv(c):
 def cev(c, kind, text, user): q('insert into cev(c,ts,"user",kind,text) values(?,?,?,?,?)', (c, ts(), user, kind, text))
 def open_case(a, user='system'):
     if q('select 1 from cases where a=?', (a['id'],), 1): return None
-    cid = 'C-%d' % (101 + q('select count(*) n from cases', (), 1)['n'])
+    cid = 'C-%d' % nxt('case_seq')
     q('insert into cases values(?,?,?,?,?,?,?)', (cid, a['id'], a['e'], now(), 1, '', ''))
     cev(cid, 'opened', 'Case opened from alert #%s (risk %d)' % (a['id'], a['score']), user)
     return cv(q('select * from cases where id=?', (cid,), 1))
@@ -766,17 +776,18 @@ def alert_status(aid: str, b: dict = Body(...), u=Depends(U)):
 def add_emp(b: dict = Body(...), u=Depends(U)):
     n = str(b.get('name', '')).replace('<', '').replace('>', '').replace('&', '').replace('"', '').strip(); d = str(b.get('dept', '')).replace('<', '').replace('>', '').replace('&', '').replace('"', '').strip()
     if len(n) < 2 or len(d) < 2: err(422, 'Name and department are required')
-    i = q('select count(*) n from emp', (), 1)['n'] + 1
-    while q('select 1 from emp where id=?', ('E%d' % i,), 1): i += 1
+    i = nxt('emp_seq')
     q('insert into emp values(?,?,?)', ('E%d' % i, n, d)); log(u['username'], 'added employee', n); return dict(id='E%d' % i, name=n, dept=d)
 @app.post('/api/events')
 def event(b: dict = Body(...), u=Depends(U)):
     import re
     e = b.get('emp')
+    if not isinstance(e, str): err(422, 'Invalid employee')
     if not q('select 1 from emp where id=?', (e,), 1): err(404, 'Employee not found')
     try: h = float(b['login_hour']); amt = float(b.get('amount') or 0); cnt = int(b.get('txn_count') or 0); vip = int(b.get('vip') or 0); cus = int(b.get('customers') or 0); ed = int(b.get('edits') or 0)
     except Exception: err(422, 'Invalid numbers')
-    if not 0 <= h < 24: err(422, 'Invalid login time')
+    if not all(math.isfinite(v) for v in (h, amt)) or not 0 <= h < 24: err(422, 'Invalid login time or amount')
+    if any(v < 0 for v in (amt, cnt, vip, cus, ed)): err(422, 'Activity values must not be negative')
     z = lambda v, m, s: (v - m) / s; rs = []
     if abs(z(h, 10, 1.2)) > 3: rs.append(['🕑', 'Unusual login at ' + clk(h), 20])
     if z(math.log1p(amt), 10.13, .35) > 3: rs.append(['💸', 'Large ' + ('₹%d Lakh' % round(amt / 1e5) if amt >= 1e5 else '₹%d' % round(amt)) + ' transfer', 30])
@@ -789,7 +800,7 @@ def event(b: dict = Body(...), u=Depends(U)):
         if not re.fullmatch(r'[A-Z0-9_-]{1,12}', cust): err(422, 'Customer ID: 1-12 letters/digits')
         o = q("select t.emp from touch t join alerts a on a.e=t.emp where t.cust=? and t.emp!=? and a.st!='Reviewed' limit 1", (cust, e), 1)
         if o: rs.append(['🔗', 'Shared payee with ' + q('select name from emp where id=?', (o['emp'],), 1)['name'], 35])
-        q('insert or ignore into touch values(?,?)', (e, cust))
+        q('insert into touch values(?,?) on conflict(emp,cust) do nothing', (e, cust))
     if IF is not None and IF.predict([[h, math.log1p(amt), cus, vip, ed]])[0] == -1 and rs: rs.append(['🤖', 'Behaviour model anomaly', 5])
     sc = min(100, sum(r[2] for r in rs)); al = None; c = None; msg = 'Within normal range (risk score %d). No alert created.' % sc
     if sc >= 30: al, c = store(e, rs, clk(h), u['username']); msg = 'Alert #%s created' % al['id']
@@ -829,8 +840,10 @@ def case_update(cid: str, b: dict = Body(...), u=Depends(U)):
 @app.api_route('/api/settings', methods=['GET', 'PUT'])
 def settings(b: dict = Body(None), u=Depends(U)):
     if b is not None:
-        if not 40 <= int(b.get('thr', 80)) <= 95: err(422, 'Threshold must be 40-95')
-        q('update prefs set email=?,auto=?,thr=?,mask=? where id=1', (int(bool(b.get('email'))), int(bool(b.get('auto'))), int(b['thr']), int(bool(b.get('mask'))))); log(u['username'], 'saved settings', 'threshold %s' % b['thr'])
+        try: threshold = int(b.get('thr', 80))
+        except (TypeError, ValueError): err(422, 'Threshold must be an integer from 40 to 95')
+        if not 40 <= threshold <= 95: err(422, 'Threshold must be 40-95')
+        q('update prefs set email=?,auto=?,thr=?,mask=? where id=1', (int(bool(b.get('email'))), int(bool(b.get('auto'))), threshold, int(bool(b.get('mask'))))); log(u['username'], 'saved settings', 'threshold %s' % threshold)
     return {k: bool(v) if k != 'thr' else v for k, v in prefs().items()}
 @app.get('/api/graph')
 def graph_get(u=Depends(U)): return graph()
@@ -844,6 +857,7 @@ def reset(u=Depends(U)):
 # ---------- Honeypot / deception: central log -> ML risk score -> alert -> session isolation ----------
 def hp_hit(b, user):
     d = next((x for x in HPD if x[0] == b.get('decoy')), None); e = b.get('emp'); act = b.get('act')
+    if not isinstance(e, str) or not isinstance(b.get('decoy'), str) or not isinstance(act, str): err(422, 'Invalid employee, decoy, or action')
     if not q('select 1 from emp where id=?', (e,), 1): err(404, 'Employee not found')
     if not d: err(404, 'Decoy not found')
     if act not in HPW: err(422, 'Invalid action')
@@ -905,6 +919,7 @@ PROD_T = ('customers', 'transactions'); DECOY_ID = {d[1]: d[0] for d in HPD}
 @app.post('/api/db/query')
 def gateway(b: dict = Body(...), u=Depends(U)):
     e = b.get('emp'); t = b.get('table'); act = str(b.get('action') or 'SELECT').upper()
+    if not isinstance(e, str) or not isinstance(t, str): err(422, 'Employee and table must be strings')
     if not q('select 1 from emp where id=?', (e,), 1): err(404, 'Employee not found')
     if act not in HPW: err(422, 'Invalid action')
     try: lim = max(1, min(500, int(b.get('limit') or 10)))
@@ -940,5 +955,5 @@ def readyz():
 
 if __name__ == '__main__':
     import uvicorn
-    print('AI Sentinel running on http://localhost:%s  (login: admin / %s)' % (os.getenv('PORT', '8000'), ADMIN_PW))
+    print('AI Sentinel running on http://localhost:%s' % os.getenv('PORT', '8000'))
     uvicorn.run(app, host='0.0.0.0', port=int(os.getenv('PORT', '8000')))
