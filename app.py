@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 DATA = os.getenv('DATA_DIR', 'data'); os.makedirs(DATA, exist_ok=True)
 DB = os.getenv('DB_PATH', os.path.join(DATA, 'production.db')); HDB = os.getenv('HONEYPOT_DB_PATH', os.path.join(DATA, 'honeypot.db')); KEY = os.getenv('REG_KEY', 'SENTINEL-2026'); ADMIN_PW = os.getenv('ADMIN_PASSWORD', 'sentinel123')
+SIMULATION_ENABLED = os.getenv('ENABLE_SIMULATION', 'false' if os.getenv('RENDER') else 'true').lower() in ('true', '1', 'yes')
 DATABASE_URL = os.getenv('DATABASE_URL')
 if DATABASE_URL:
     import psycopg
@@ -395,7 +396,7 @@ function route(m,p,b,tok){
  if(p=='/health')return R({ok:true});
  const un=sessions[tok];if(!un)return err(401,'Login required');const u=USERS[un];
  if(p=='/logout'){delete sessions[tok];log(un,'logout');return R({ok:true})}
- if(p=='/bootstrap')return R({user:{username:un,name:u.name,role:u.role},emp:st.emp,alerts:st.alerts.slice().sort((x,y)=>y.score-x.score),cases:st.cases.map(cv),settings:st.prefs,graph:graph()});
+ if(p=='/bootstrap')return R({user:{username:un,name:u.name,role:u.role},emp:st.emp,alerts:st.alerts.slice().sort((x,y)=>y.score-x.score),cases:st.cases.map(cv),settings:st.prefs,graph:graph(),simulation_enabled:true});
  let x;if(x=p.match(/^\/alerts\/(.+)\/status$/)){const a=st.alerts.find(q=>q.id==x[1]);if(!a)return err(404,'Alert not found');if(!['New','Escalated','Reviewed'].includes(b.status))return err(422,'Invalid status');a.st=b.status;if(b.status=='Escalated')openCase(a,un);if(b.status=='Reviewed')st.cases.forEach(c=>{if(c.a==a.id&&c.open){c.open=0;cev(c,'closed','Closed because the alert was marked reviewed',un)}});log(un,b.status.toLowerCase(),'alert #'+a.id);return R(a)}
  if(p=='/employees'){const n=String(b.name||'').replace(/[<>&"]/g,'').trim(),d=String(b.dept||'').replace(/[<>&"]/g,'').trim();if(n.length<2||d.length<2)return err(422,'Name and department are required');let i=Object.keys(st.emp).length+1;while(st.emp['E'+i])i++;st.emp['E'+i]=[n,d];log(un,'added employee',n);return R({id:'E'+i,name:n,dept:d})}
  if(p=='/events')return event(b,un);
@@ -593,6 +594,7 @@ const loadAudit=()=>call('/audit').then(r=>{$('#audit').innerHTML=r.map(x=>`<div
 async function boot(keep){const d=await call('/bootstrap');Object.keys(EMP).forEach(k=>delete EMP[k]);Object.assign(EMP,d.emp);AL=d.alerts;S.cases=d.cases;Object.assign(S.set,d.settings);
  $('#s-email').checked=S.set.email;$('#s-auto').checked=S.set.auto;$('#s-mask').checked=S.set.mask;$('#s-thr').value=S.set.thr;$('#tv').textContent=S.set.thr;
  $('#reset').hidden=d.user.role!='admin';
+ S.live=!!d.simulation_enabled;$('#live').hidden=!S.live;
  $('#uname').textContent=d.user.name;$('#uav').textContent=d.user.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
  applyGraph(d.graph);S.sel=AL[0]?AL[0].id:'';$('#login').hidden=true;const h=location.hash.slice(1);if(!keep)S.view=T[h]?h:'dashboard';render();loadAudit()}
 const panel=n=>{['login','gate','reg'].forEach(p=>$('#p-'+p).hidden=p!=n);['le','ge','re','lok'].forEach(i=>$('#'+i).textContent='')};
@@ -697,7 +699,7 @@ OUT = ['', 'Confirmed fraud', 'False positive', 'Inconclusive']
 @app.get('/api/health')
 async def health(): return {'ok': True}
 @app.post('/api/login')
-async def login(b: dict = Body(...)):
+def login(b: dict = Body(...)):
     n = str(b.get('username', '')); f = FAILS.get(n, (0, 0))
     if f[0] >= 5 and datetime.now().timestamp() - f[1] < 300: err(429, 'Too many attempts. Try again in 5 minutes')
     u = q('select * from users where username=?', (n,), 1)
@@ -706,11 +708,11 @@ async def login(b: dict = Body(...)):
     FAILS.pop(n, None); t = secrets.token_urlsafe(32); q('insert into sessions values(?,?)', (t, n)); log(n, 'login')
     return dict(token=t, user=dict(username=n, name=u['name'], role=u['role']))
 @app.post('/api/register/verify')
-async def reg_verify(b: dict = Body(...)):
+def reg_verify(b: dict = Body(...)):
     if not secrets.compare_digest(str(b.get('key', '')), KEY): err(403, 'Invalid access key')
     return {'ok': True}
 @app.post('/api/register')
-async def register(b: dict = Body(...)):
+def register(b: dict = Body(...)):
     import re
     if not secrets.compare_digest(str(b.get('key', '')), KEY): err(403, 'Invalid access key')
     n = str(b.get('username', '')); p = str(b.get('password', ''))
@@ -719,14 +721,14 @@ async def register(b: dict = Body(...)):
     if q('select 1 from users where username=?', (n,), 1): err(409, 'Username already taken')
     s = secrets.token_hex(8); q('insert into users values(?,?,?,?,?)', (n, hpw(p, s), s, re.sub(r'[<>&"]', '', str(b.get('name') or n))[:40], 'analyst')); log(n, 'registered'); return {'ok': True}
 @app.post('/api/logout')
-async def logout(u=Depends(U), authorization: str = Header(None)):
+def logout(u=Depends(U), authorization: str = Header(None)):
     q('delete from sessions where token=?', (authorization.replace('Bearer ', ''),)); log(u['username'], 'logout'); return {'ok': True}
 @app.get('/api/bootstrap')
-async def bootstrap(u=Depends(U)):
+def bootstrap(u=Depends(U)):
     return dict(user=dict(username=u['username'], name=u['name'], role=u['role']), emp={e['id']: [e['name'], e['dept']] for e in q('select * from emp')},
-                alerts=q('select * from alerts order by score desc'), cases=[cv(c) for c in q('select * from cases order by id desc')], settings={k: bool(v) if k != 'thr' else v for k, v in prefs().items()}, graph=graph())
+                alerts=q('select * from alerts order by score desc'), cases=[cv(c) for c in q('select * from cases order by id desc')], settings={k: bool(v) if k != 'thr' else v for k, v in prefs().items()}, graph=graph(), simulation_enabled=SIMULATION_ENABLED)
 @app.post('/api/alerts/{aid}/status')
-async def alert_status(aid: str, b: dict = Body(...), u=Depends(U)):
+def alert_status(aid: str, b: dict = Body(...), u=Depends(U)):
     a = q('select * from alerts where id=?', (aid,), 1) or err(404, 'Alert not found')
     if b.get('status') not in ('New', 'Escalated', 'Reviewed'): err(422, 'Invalid status')
     q('update alerts set st=? where id=?', (b['status'], aid)); a['st'] = b['status']
@@ -735,14 +737,14 @@ async def alert_status(aid: str, b: dict = Body(...), u=Depends(U)):
         for c in q('select * from cases where a=? and open=1', (aid,)): q('update cases set open=0 where id=?', (c['id'],)); cev(c['id'], 'closed', 'Closed because the alert was marked reviewed', u['username'])
     log(u['username'], b['status'].lower(), 'alert #' + aid); return a
 @app.post('/api/employees')
-async def add_emp(b: dict = Body(...), u=Depends(U)):
+def add_emp(b: dict = Body(...), u=Depends(U)):
     n = str(b.get('name', '')).replace('<', '').replace('>', '').replace('&', '').replace('"', '').strip(); d = str(b.get('dept', '')).replace('<', '').replace('>', '').replace('&', '').replace('"', '').strip()
     if len(n) < 2 or len(d) < 2: err(422, 'Name and department are required')
     i = q('select count(*) n from emp', (), 1)['n'] + 1
     while q('select 1 from emp where id=?', ('E%d' % i,), 1): i += 1
     q('insert into emp values(?,?,?)', ('E%d' % i, n, d)); log(u['username'], 'added employee', n); return dict(id='E%d' % i, name=n, dept=d)
 @app.post('/api/events')
-async def event(b: dict = Body(...), u=Depends(U)):
+def event(b: dict = Body(...), u=Depends(U)):
     import re
     e = b.get('emp')
     if not q('select 1 from emp where id=?', (e,), 1): err(404, 'Employee not found')
@@ -771,11 +773,11 @@ async def event(b: dict = Body(...), u=Depends(U)):
 
 # ---------- cases / settings / misc ----------
 @app.get('/api/cases')
-async def cases(u=Depends(U)): return [cv(c) for c in q('select * from cases order by id desc')]
+def cases(u=Depends(U)): return [cv(c) for c in q('select * from cases order by id desc')]
 @app.get('/api/cases/{cid}')
-async def case_get(cid: str, u=Depends(U)): return cdet(case(cid))
+def case_get(cid: str, u=Depends(U)): return cdet(case(cid))
 @app.post('/api/cases/{cid}/toggle')
-async def toggle(cid: str, b: dict = Body(None), u=Depends(U)):
+def toggle(cid: str, b: dict = Body(None), u=Depends(U)):
     c = case(cid); b = b or {}; o = b.get('outcome')
     if o is not None and o not in OUT: err(422, 'Invalid outcome')
     if c['open']:
@@ -783,13 +785,13 @@ async def toggle(cid: str, b: dict = Body(None), u=Depends(U)):
     else: q("update cases set open=1,outcome='' where id=?", (cid,)); q("update alerts set st='Escalated' where id=?", (c['a'],)); cev(cid, 'reopened', 'Case reopened', u['username'])
     log(u['username'], 'toggled case', cid); return [cv(x) for x in q('select * from cases order by id desc')]
 @app.post('/api/cases/{cid}/notes')
-async def note(cid: str, b: dict = Body(...), u=Depends(U)):
+def note(cid: str, b: dict = Body(...), u=Depends(U)):
     c = case(cid); t = str(b.get('text', '')).strip()
     if not t: err(422, 'Note cannot be empty')
     if len(t) > 1000: err(422, 'Invalid text: too long')
     cev(cid, 'note', t, u['name']); log(u['username'], 'case note', cid); return cdet(c)
 @app.post('/api/cases/{cid}/update')
-async def case_update(cid: str, b: dict = Body(...), u=Depends(U)):
+def case_update(cid: str, b: dict = Body(...), u=Depends(U)):
     c = case(cid)
     if b.get('assign') is not None:
         if b['assign'] not in ('me', 'none'): err(422, 'Invalid assignment')
@@ -799,17 +801,17 @@ async def case_update(cid: str, b: dict = Body(...), u=Depends(U)):
         q('update cases set outcome=? where id=?', (b['outcome'], cid)); cev(cid, 'outcome', b['outcome'] or 'Outcome cleared', u['username'])
     log(u['username'], 'updated case', cid); return cdet(case(cid))
 @app.api_route('/api/settings', methods=['GET', 'PUT'])
-async def settings(b: dict = Body(None), u=Depends(U)):
+def settings(b: dict = Body(None), u=Depends(U)):
     if b is not None:
         if not 40 <= int(b.get('thr', 80)) <= 95: err(422, 'Threshold must be 40-95')
         q('update prefs set email=?,auto=?,thr=?,mask=? where id=1', (int(bool(b.get('email'))), int(bool(b.get('auto'))), int(b['thr']), int(bool(b.get('mask'))))); log(u['username'], 'saved settings', 'threshold %s' % b['thr'])
     return {k: bool(v) if k != 'thr' else v for k, v in prefs().items()}
 @app.get('/api/graph')
-async def graph_get(u=Depends(U)): return graph()
+def graph_get(u=Depends(U)): return graph()
 @app.get('/api/audit')
-async def audit(u=Depends(U)): return q('select ts,"user",action,detail from audit order by id desc limit 30')
+def audit(u=Depends(U)): return q('select ts,"user",action,detail from audit order by id desc limit 30')
 @app.post('/api/reset')
-async def reset(u=Depends(U)):
+def reset(u=Depends(U)):
     if u['role'] != 'admin': err(403, 'Admin only')
     seed(); log(u['username'], 'reset demo data'); return {'ok': True}
 
@@ -839,18 +841,18 @@ def hp_hit(b, user):
     log(user, 'honeypot hit', '#%s %s score %d' % (a['id'], d[1], sc))
     return dict(alert=a, case=c, score=sc, isolated=iso, session=s['id'], message='Alert #%s created' % a['id'] + (' · session %s isolated automatically' % s['id'] if iso else ''))
 @app.get('/api/honeypot')
-async def hp_get(u=Depends(U)):
+def hp_get(u=Depends(U)):
     L = hq('select * from hlog order by id desc'); names = {d[0]: d[1] for d in HPD}; ms = [l['ms'] for l in L if l['ms']]; ss = hq('select * from hsess order by id desc limit 12')
     return dict(auto=q("select v from meta where k='hauto'", (), 1)['v'] == '1', decoys=[dict(id=d[0], name=d[1], kind=d[2], sens=d[3], hits=sum(1 for l in L if l['dec'] == d[0])) for d in HPD],
                 log=[dict(id='L-%d' % l['id'], ts=l['ts'], emp=l['emp'], src=l['src'], dec=l['dec'], obj=names.get(l['dec']) or l['obj'], act=l['act'], rows=l['nrows'], score=l['score'], alert=l['alert'], iso=l['iso'], sess=l['sess'], ms=l['ms']) for l in L[:40]],
                 sess=ss, stats=dict(events=len(L), hits=sum(1 for l in L if l['dec']), isolated=sum(1 for s in ss if s['state'] == 'Isolated'), avg_ms=round(sum(ms) / len(ms)) if ms else 0))
 @app.post('/api/honeypot/trip')
-async def hp_trip(b: dict = Body(...), u=Depends(U)): return hp_hit(dict(emp=b.get('emp'), decoy=b.get('decoy'), act=b.get('action'), rows=b.get('rows'), hour=b.get('hour'), new_device=b.get('new_device')), u['username'])
+def hp_trip(b: dict = Body(...), u=Depends(U)): return hp_hit(dict(emp=b.get('emp'), decoy=b.get('decoy'), act=b.get('action'), rows=b.get('rows'), hour=b.get('hour'), new_device=b.get('new_device')), u['username'])
 @app.post('/api/honeypot/policy')
-async def hp_policy(b: dict = Body(...), u=Depends(U)):
+def hp_policy(b: dict = Body(...), u=Depends(U)):
     q("insert into meta(k,v) values('hauto',?) on conflict(k) do update set v=excluded.v", ('1' if b.get('auto') else '0',)); log(u['username'], 'honeypot policy', 'auto-isolate %s' % ('on' if b.get('auto') else 'off')); return dict(auto=bool(b.get('auto')))
 @app.post('/api/honeypot/sessions/{sid}/{act}')
-async def hp_session(sid: str, act: str, u=Depends(U)):
+def hp_session(sid: str, act: str, u=Depends(U)):
     s = hq('select * from hsess where id=?', (sid,), 1)
     if act not in ('isolate', 'release', 'terminate'): err(404, 'Not found')
     if not s: err(404, 'Session not found')
@@ -861,7 +863,8 @@ async def hp_session(sid: str, act: str, u=Depends(U)):
 
 # ---------- live simulation (stands in for a real log shipper) ----------
 @app.post('/api/simulate')
-async def simulate(u=Depends(U)):
+def simulate(u=Depends(U)):
+    if not SIMULATION_ENABLED: err(403, 'Automatic demo simulation is disabled')
     k = [e['id'] for e in q('select id from emp')]
     for _ in range(random.randint(1, 3)): hq('insert into hlog(ts,emp,src,dec,obj,act,nrows,score,alert,iso,sess,ms) values(?,?,?,?,?,?,?,?,?,?,?,?)', (now(), random.choice(k), random.choice(['Core DB', 'App gateway']), None, random.choice(['customer_accounts', 'txn_ledger', 'branch_report', 'loan_applications']), 'SELECT', random.randint(1, 40), random.randint(2, 13), None, 0, '', 0))
     if random.random() < .3: return hp_hit(dict(emp=random.choice(k), decoy=random.choice(HPD)[0], act=random.choice(['SELECT', 'SELECT', 'EXPORT', 'UPDATE', 'DELETE']), rows=random.choice([3, 15, 120, 2500, 9000]), hour=random.choice([random.randint(0, 5) + random.random() * .9, random.randint(10, 17)]), new_device=random.random() < .5), 'system')
@@ -874,7 +877,7 @@ async def simulate(u=Depends(U)):
 # ---------- Database gateway: routes every query to production or honeypot, enforces isolation ----------
 PROD_T = ('customers', 'transactions'); DECOY_ID = {d[1]: d[0] for d in HPD}
 @app.post('/api/db/query')
-async def gateway(b: dict = Body(...), u=Depends(U)):
+def gateway(b: dict = Body(...), u=Depends(U)):
     e = b.get('emp'); t = b.get('table'); act = str(b.get('action') or 'SELECT').upper()
     if not q('select 1 from emp where id=?', (e,), 1): err(404, 'Employee not found')
     if act not in HPW: err(422, 'Invalid action')
@@ -904,7 +907,7 @@ async def healthz():
     return {'status': 'ok'}
 
 @app.get('/readyz')
-async def readyz():
+def readyz():
     q('select 1')
     hq('select 1')
     return {'status': 'ok'}

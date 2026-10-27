@@ -13,3 +13,5 @@ services:
         generateValue: true
       - key: REG_KEY
         generateValue: true
+      - key: ENABLE_SIMULATION
+        value: "false"
