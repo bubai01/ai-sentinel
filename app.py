@@ -890,6 +890,10 @@ async def index(): return INDEX_HTML
 
 @app.get('/healthz')
 async def healthz():
+    return {'status': 'ok'}
+
+@app.get('/readyz')
+async def readyz():
     q('select 1')
     hq('select 1')
     return {'status': 'ok'}

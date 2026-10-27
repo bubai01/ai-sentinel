@@ -19,7 +19,7 @@ The Render Blueprint in `render.yaml` builds the included Dockerfile, creates a 
 1. Push this repository to GitHub.
 2. In Render, choose **New → Blueprint**, connect the GitHub repository, and apply the `render.yaml` blueprint.
 3. In Neon, open the project and copy its **direct (unpooled) PostgreSQL connection string**. In the Render service's environment settings, set `DATABASE_URL` to that value and save. Keep the connection string private.
-4. Wait for the Render deploy to finish and check `/healthz`. The health check verifies both database schemas.
+4. Wait for the Render deploy to finish and check `/healthz` for app availability. Use `/readyz` to verify connectivity to both database schemas.
 5. In Render's environment settings, reveal `ADMIN_PASSWORD` and use it to sign in as `admin`. Keep both generated secrets private.
 
 Render's free web service may sleep when idle. Neon is the persistent cloud database; no Render disk is required.
