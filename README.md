@@ -22,7 +22,7 @@ The Render Blueprint in `render.yaml` builds the included Dockerfile, creates a 
 4. Wait for the Render deploy to finish and check `/healthz` for app availability. Use `/readyz` to verify connectivity to both database schemas.
 5. In Render's environment settings, reveal `ADMIN_PASSWORD` and use it to sign in as `admin`. Keep both generated secrets private.
 
-Render's free web service may sleep when idle. Neon is the persistent cloud database; no Render disk is required. Render disables the automatic demo-activity simulator (`ENABLE_SIMULATION=false`) so sample alerts do not accumulate in production. Local runs keep the simulator enabled by default; set `ENABLE_SIMULATION=false` to turn it off.
+Render's free web service may sleep when idle. Neon is the persistent cloud database; no Render disk is required. If a Neon connection becomes stale, the app reconnects and safely retries read-only queries; it never replays a write whose result may be uncertain. Render disables the automatic demo-activity simulator (`ENABLE_SIMULATION=false`) so sample alerts do not accumulate in production. Local runs keep the simulator enabled by default; set `ENABLE_SIMULATION=false` to turn it off.
 
 ## How Layer 2 works
 1. **Gateway** (`POST /api/db/query`) routes each query: normal tables -> production DB; decoy tables -> honeypot DB.
