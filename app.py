@@ -58,9 +58,9 @@ create table if not exists emp(id text primary key,name text,dept text);
 create table if not exists touch(emp text,cust text,unique(emp,cust));
 create table if not exists alerts(id text primary key,e text,trig text,score integer,st text,t text,r text);
 create table if not exists cases(id text primary key,a text,e text,t text,open integer,owner text,outcome text);
-create table if not exists cev(id {INTEGER_ID},c text,ts text,user text,kind text,text text);
+create table if not exists cev(id {INTEGER_ID},c text,ts text,"user" text,kind text,text text);
 create table if not exists prefs(id integer primary key,email int,auto int,thr int,mask int);
-create table if not exists audit(id {INTEGER_ID},ts text,user text,action text,detail text);
+create table if not exists audit(id {INTEGER_ID},ts text,"user" text,action text,detail text);
 create table if not exists meta(k text primary key,v text);
 create table if not exists customers(id text primary key,name text,city text,balance integer);
 create table if not exists transactions(id {INTEGER_ID},cust text,amount integer,ts text);
@@ -80,7 +80,7 @@ def hpw(p, s): return hashlib.pbkdf2_hmac('sha256', p.encode(), s.encode(), 1200
 def now(): return datetime.now().strftime('%I:%M %p').lstrip('0')
 def ts(): return datetime.now().strftime('%d %b, %H:%M')
 def clk(h): hh = int(h); m = round((h - hh) * 60); return '%d:%02d %s' % ((hh % 12) or 12, m, 'AM' if hh < 12 else 'PM')
-def log(u, a, d=''): q('insert into audit(ts,user,action,detail) values(?,?,?,?)', (ts(), u, a, d))
+def log(u, a, d=''): q('insert into audit(ts,"user",action,detail) values(?,?,?,?)', (ts(), u, a, d))
 def nxt(k): v = int(q('select v from meta where k=?', (k,), 1)['v']) + 1; q('insert into meta(k,v) values(?,?) on conflict(k) do update set v=excluded.v', (k, str(v))); return v
 def prefs(): return q('select email,auto,thr,mask from prefs where id=1', (), 1)
 def err(c, d): raise HTTPException(c, d)
@@ -642,7 +642,7 @@ def U(authorization: str = Header(None)):
 def cv(c):
     a = q('select score from alerts where id=?', (c['a'],), 1)
     return dict(id=c['id'], a=c['a'], e=c['e'], t=c['t'], open=c['open'], owner=c['owner'], outcome=c['outcome'], score=a['score'] if a else 0, notes=q("select count(*) n from cev where c=? and kind='note'", (c['id'],), 1)['n'])
-def cev(c, kind, text, user): q('insert into cev(c,ts,user,kind,text) values(?,?,?,?,?)', (c, ts(), user, kind, text))
+def cev(c, kind, text, user): q('insert into cev(c,ts,"user",kind,text) values(?,?,?,?,?)', (c, ts(), user, kind, text))
 def open_case(a, user='system'):
     if q('select 1 from cases where a=?', (a['id'],), 1): return None
     cid = 'C-%d' % (101 + q('select count(*) n from cases', (), 1)['n'])
@@ -796,7 +796,7 @@ async def settings(b: dict = Body(None), u=Depends(U)):
 @app.get('/api/graph')
 async def graph_get(u=Depends(U)): return graph()
 @app.get('/api/audit')
-async def audit(u=Depends(U)): return q('select ts,user,action,detail from audit order by id desc limit 30')
+async def audit(u=Depends(U)): return q('select ts,"user",action,detail from audit order by id desc limit 30')
 @app.post('/api/reset')
 async def reset(u=Depends(U)):
     if u['role'] != 'admin': err(403, 'Admin only')
